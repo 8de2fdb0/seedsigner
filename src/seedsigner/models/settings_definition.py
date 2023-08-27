@@ -153,6 +153,7 @@ class SettingsConstants:
     SETTING__NETWORK = "network"
     SETTING__QR_DENSITY = "qr_density"
     SETTING__XPUB_EXPORT = "xpub_export"
+    SETTING__SLIP39_EXPORT = "slip39_export"
     SETTING__SIG_TYPES = "sig_types"
     SETTING__SCRIPT_TYPES = "script_types"
     SETTING__XPUB_DETAILS = "xpub_details"
@@ -401,6 +402,12 @@ class SettingsDefinition:
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__XPUB_EXPORT,
                       display_name="Xpub export",
+                      visibility=SettingsConstants.VISIBILITY__ADVANCED,
+                      default_value=SettingsConstants.OPTION__ENABLED),
+
+        SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
+                      attr_name=SettingsConstants.SETTING__SLIP39_EXPORT,
+                      display_name="Shamir Shared Secret export",
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__ENABLED),
 

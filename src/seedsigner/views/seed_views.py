@@ -3,7 +3,7 @@ import random
 import time
 
 from binascii import hexlify
-from embit import bip39
+from embit import bip39, slip39
 from embit.descriptor import Descriptor
 from embit.networks import NETWORKS
 from typing import List
@@ -429,6 +429,7 @@ class SeedOptionsView(View):
     SCAN_PSBT = ("Scan PSBT", SeedSignerIconConstants.QRCODE)
     VERIFY_ADDRESS = "Verify Addr"
     EXPORT_XPUB = "Export Xpub"
+    EXPORT_SLIP39 = "Export Shamir Secret"
     EXPLORER = "Address Explorer"
     SIGN_MESSAGE = "Sign Message"
     BACKUP = ("Backup Seed", None, None, None, SeedSignerIconConstants.CHEVRON_RIGHT)
@@ -481,6 +482,9 @@ class SeedOptionsView(View):
         if self.settings.get_value(SettingsConstants.SETTING__XPUB_EXPORT) == SettingsConstants.OPTION__ENABLED:
             button_data.append(self.EXPORT_XPUB)
 
+        if self.settings.get_value(SettingsConstants.SETTING__SLIP39_EXPORT) == SettingsConstants.OPTION__ENABLED:
+            button_data.append(self.EXPORT_SLIP39)
+
         button_data.append(self.EXPLORER)
         button_data.append(self.BACKUP)
 
@@ -513,6 +517,9 @@ class SeedOptionsView(View):
 
         elif button_data[selected_menu_num] == self.EXPORT_XPUB:
             return Destination(SeedExportXpubSigTypeView, view_args=dict(seed_num=self.seed_num))
+
+        elif button_data[selected_menu_num] == self.EXPORT_SLIP39:
+            return Destination(SeedExportSLIP39TypeView, view_args=dict(seed_num=self.seed_num))
 
         elif button_data[selected_menu_num] == self.EXPLORER:
             self.controller.resume_main_flow = Controller.FLOW__ADDRESS_EXPLORER
@@ -896,6 +903,282 @@ class SeedExportXpubQRDisplayView(View):
 
         return Destination(MainMenuView)
 
+
+"""****************************************************************************
+    Export SLIP39 Shamir Secret Shares flow
+****************************************************************************"""
+class SeedExportSLIP39TypeView(View):
+    TWO_OF_THREE = "2 out of 3 Shares"
+    THREE_OF_FIVE = "3 out of 5 Shares"
+    CUSTOM_K_OF_N = "Custom Threshold"
+
+    def __init__(self, seed_num: int):
+        super().__init__()
+        self.seed_num = seed_num
+        self.seed = self.controller.get_seed(self.seed_num)
+
+
+    def run(self):
+        if len(self.settings.get_value(SettingsConstants.SETTING__SIG_TYPES)) == 1:
+            # Nothing to select; skip this screen
+            return Destination(SeedExportXpubScriptTypeView, view_args={"seed_num": self.seed_num, "sig_type": self.settings.get_value(SettingsConstants.SETTING__SIG_TYPES)[0]}, skip_current_view=True)
+
+        button_data=[self.TWO_OF_THREE, self.THREE_OF_FIVE, self.CUSTOM_K_OF_N]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title="Export Xpub",
+            button_data=button_data
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+        
+        mnemonic_srt = self.seed.mnemonic_display_str
+        
+        if button_data[selected_menu_num] == self.TWO_OF_THREE:
+            slip39_share_list = slip39.ShareSet.generate_shares(mnemonic_srt, 2, 3)
+            return Destination(SLIP39WordsView, view_args=dict(seed_num=self.seed_num, slip39_share_list=slip39_share_list))
+
+        elif button_data[selected_menu_num] == self.THREE_OF_FIVE:
+            slip39_share_list = slip39.ShareSet.generate_shares(mnemonic_srt, 3, 5)
+            return Destination(SLIP39WordsView, view_args=dict(seed_num=self.seed_num, slip39_share_list=slip39_share_list))
+
+
+class SLIP39WordsView(View):
+    def __init__(self, seed_num: int, slip39_share_list: List[str], share_index: int = 0, page_index: int = 0):
+        super().__init__()
+        self.seed_num = seed_num
+        self.slip39_share_list = slip39_share_list
+        self.shares = len(slip39_share_list)
+
+        self.share_index = share_index
+        self.page_index = page_index
+
+
+    def run(self):
+        NEXT = "Next"
+        NEXT_SHARE = "Next Share"
+        DONE = "Done"
+
+        # Slice the mnemonic to our current 4-word section
+        words_per_page = 4  # TODO: eventually make this configurable for bigger screens?
+        
+        title = f"Shamir Share {self.share_index + 1}"
+
+        slip39_mnemonic_word_list = self.slip39_share_list[self.share_index].split(" ")
+        words = slip39_mnemonic_word_list[self.page_index*words_per_page:(self.page_index + 1)*words_per_page]
+
+        button_data = []
+        num_pages = int(len(slip39_mnemonic_word_list)/words_per_page)
+        if self.page_index < num_pages - 1:
+            button_data.append(NEXT)
+        elif self.share_index < self.shares - 1:
+            button_data.append(NEXT_SHARE)
+        else:
+            button_data.append(DONE)
+
+        selected_menu_num = seed_screens.SeedWordsScreen(
+            title=f"{title}: {self.page_index+1}/{num_pages}",
+            words=words,
+            page_index=self.page_index,
+            num_pages=num_pages,
+            button_data=button_data,
+        ).display()
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if button_data[selected_menu_num] == NEXT:
+            return Destination(
+                SLIP39WordsView,
+                view_args=dict(seed_num=self.seed_num, slip39_share_list=self.slip39_share_list, share_index=self.share_index, page_index=self.page_index + 1)
+            )
+
+        else:
+            return Destination(
+                SLIP39WordsBackupTestPromptView,
+                view_args=dict(seed_num=self.seed_num, slip39_share_list=self.slip39_share_list, share_index=self.share_index)
+            )
+
+class SLIP39WordsBackupTestPromptView(View):
+    def __init__(self, seed_num: int, slip39_share_list: List[str], share_index: int):
+        super().__init__()
+        self.seed_num = seed_num
+        self.slip39_share_list = slip39_share_list
+        self.shares = len(slip39_share_list)
+        self.share_index = share_index
+
+    def run(self):
+        VERIFY = "Verify"
+        SKIP = "Skip"
+        button_data = [VERIFY, SKIP]
+        selected_menu_num = seed_screens.SeedWordsBackupTestPromptScreen(
+            title=f"Verify Shamir Share {self.share_index + 1}?",
+            button_data=button_data,
+        ).display()
+
+        if button_data[selected_menu_num] == VERIFY:
+            return Destination(
+                SLIP39WordsBackupTestView,
+                view_args=dict(seed_num=self.seed_num, slip39_share_list=self.slip39_share_list, share_index=self.share_index)
+            )
+
+        elif button_data[selected_menu_num] == SKIP:
+            if self.share_index < self.shares - 1:
+                return Destination(
+                    SLIP39WordsView,
+                    view_args=dict(seed_num=self.seed_num, slip39_share_list=self.slip39_share_list, share_index=self.share_index + 1)
+                )
+            else:
+                return Destination(SeedOptionsView, view_args=dict(seed_num=self.seed_num), clear_history=True)
+
+class SLIP39WordsBackupTestView(View):
+    def __init__(self, seed_num: int, slip39_share_list: List[str], share_index: int, confirmed_list: List[bool] = None, cur_index: int = None):
+        super().__init__()
+        self.seed_num = seed_num
+        self.slip39_share_list = slip39_share_list
+        self.shares = len(slip39_share_list)
+        self.share_index = share_index
+
+        self.slip39_mnemonic_word_list = self.slip39_share_list[self.share_index].split(" ")
+
+        self.confirmed_list = confirmed_list
+        if not self.confirmed_list:
+            self.confirmed_list = []
+
+        self.cur_index = cur_index
+
+
+    def run(self):
+        if self.cur_index is None:
+            self.cur_index = int(random.random() * len(self.slip39_mnemonic_word_list))
+            while self.cur_index in self.confirmed_list:
+                self.cur_index = int(random.random() * len(self.slip39_mnemonic_word_list))
+
+        real_word = self.slip39_mnemonic_word_list[self.cur_index]
+        fake_word1 = slip39.SLIP39_WORDS[int(random.random() * 1023)]
+        fake_word2 = slip39.SLIP39_WORDS[int(random.random() * 1023)]
+        fake_word3 = slip39.SLIP39_WORDS[int(random.random() * 1023)]
+
+        button_data = [real_word, fake_word1, fake_word2, fake_word3]
+        random.shuffle(button_data)
+
+        selected_menu_num = ButtonListScreen(
+            title=f"Verify Word #{self.cur_index + 1}",
+            show_back_button=False,
+            button_data=button_data,
+            is_bottom_list=True,
+            is_button_text_centered=True,
+        ).display()
+
+        if button_data[selected_menu_num] == real_word:
+            self.confirmed_list.append(self.cur_index)
+            if len(self.confirmed_list) == len(self.slip39_mnemonic_word_list):
+                # Successfully confirmed the full mnemonic!
+                return Destination(
+                    SLIP39WordsBackupTestSuccessView,
+                    view_args=dict(
+                        seed_num=self.seed_num, 
+                        slip39_share_list=self.slip39_share_list, 
+                        share_index=self.share_index
+                    )
+                )
+            else:
+                # Continue testing the remaining words
+                return Destination(
+                    SLIP39WordsBackupTestView,
+                    view_args=dict(
+                        seed_num=self.seed_num, 
+                        slip39_share_list=self.slip39_share_list, 
+                        share_index=self.share_index, 
+                        confirmed_list=self.confirmed_list,
+                    )
+                )
+
+        else:
+            # Picked the WRONG WORD!
+            return Destination(
+                SLIP39WordsBackupTestMistakeView,
+                view_args=dict(
+                    seed_num=self.seed_num,
+                    slip39_share_list=self.slip39_share_list, 
+                    share_index=self.share_index,
+                    cur_index=self.cur_index,
+                    wrong_word=button_data[selected_menu_num],
+                    confirmed_list=self.confirmed_list,
+                )
+            )
+
+class SLIP39WordsBackupTestMistakeView(View):
+    def __init__(self, seed_num: int, slip39_share_list: List[str], share_index: int, cur_index: int = None, wrong_word: str = None, confirmed_list: List[bool] = None):
+        super().__init__()
+        self.seed_num = seed_num
+        self.slip39_share_list = slip39_share_list
+        self.share_index = share_index
+        self.cur_index = cur_index
+        self.wrong_word = wrong_word
+        self.confirmed_list = confirmed_list
+
+
+    def run(self):
+        REVIEW = "Review Shamir Share"
+        RETRY = "Try Again"
+        button_data = [REVIEW, RETRY]
+
+        selected_menu_num = DireWarningScreen(
+            title="Verification Error",
+            show_back_button=False,
+            status_headline=f"Wrong Word!",
+            text=f"Word #{self.cur_index + 1} is not \"{self.wrong_word}\"!",
+            button_data=button_data,
+        ).display()
+
+        if button_data[selected_menu_num] == REVIEW:
+            return Destination(
+                SLIP39WordsView,
+                view_args=dict(
+                    seed_num=self.seed_num, 
+                    slip39_share_list=self.slip39_share_list, 
+                    share_index=self.share_index
+                )
+            )
+
+        elif button_data[selected_menu_num] == RETRY:
+            return Destination(
+                SLIP39WordsBackupTestView,
+                view_args=dict(
+                    seed_num=self.seed_num,
+                    slip39_share_list=self.slip39_share_list,
+                    share_index=self.share_index,
+                    confirmed_list=self.confirmed_list,
+                    cur_index=self.cur_index,
+                )
+            )
+        
+class SLIP39WordsBackupTestSuccessView(View):
+    def __init__(self, seed_num: int, slip39_share_list: List[str], share_index: int,):
+        super().__init__()
+        self.seed_num = seed_num
+        self.slip39_share_list = slip39_share_list
+        self.share_index = share_index
+
+    def run(self):
+        LargeIconStatusScreen(
+            title=f"Shamir Share {self.share_index + 1} Verified",
+            show_back_button=False,
+            status_headline="Success!",
+            text="All mnemonic backup words were successfully verified!",
+            button_data=["OK"]
+        ).display()
+
+        if self.share_index < len(self.slip39_share_list) - 1:
+            return Destination(
+                SLIP39WordsView,
+                view_args=dict(slip39_share_list=self.slip39_share_list, share_index=self.share_index + 1),
+            )
+        else:
+            return Destination(SeedOptionsView, view_args=dict(seed_num=self.seed_num), clear_history=True)
 
 
 """****************************************************************************

@@ -545,6 +545,9 @@ class SeedBIP85SelectChildIndexScreen(KeyboardScreen):
 
 @dataclass
 class SeedWordsBackupTestPromptScreen(ButtonListScreen):
+    title = "Verify Backup?"
+    text = "Optionally verify that your mnemonic backup is correct."
+      
     def __post_init__(self):
         self.title = "Verify Backup?"
         self.show_back_button = False
